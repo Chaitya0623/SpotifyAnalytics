@@ -6,11 +6,11 @@ execute:
   echo: true
 
 book:
-  title: "YOUR PROJECT TITLE"
+  title: "A Data-Driven Study of Spotify Track Audio Features"
   author:
-    - AUTHOR1 (UNI1)
-    - AUTHOR2 (UNI2)
-  repo-url: https://github.com/YOUR_GITHUB_ACCOUNT/REPO_NAME
+    - Chaitya Shah (cs4621)
+    - Adityaram Komaraneni (ak5480)
+  repo-url: https://github.com/Chaitya0623/SpotifyAnalytics
   date: today
   page-footer:
     right: |
