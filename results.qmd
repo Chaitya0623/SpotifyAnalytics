@@ -1,1 +1,374 @@
 # Results
+
+###############################################################
+# Spotify Multidecade Analysis - 10 High-Quality Audience-Ready Plots
+###############################################################
+
+# ------------------- Libraries -------------------------
+library(spotifyr)
+library(tidyverse)
+library(lubridate)
+library(ggridges)
+library(GGally)
+library(viridis)
+library(scales)
+library(janitor)
+
+# ------------------- Authenticate -----------------------
+Sys.setenv(SPOTIFY_CLIENT_ID = "YOUR_CLIENT_ID")
+Sys.setenv(SPOTIFY_CLIENT_SECRET = "YOUR_CLIENT_SECRET")
+access_token <- get_spotify_access_token()
+
+# ------------------- Decade Playlists -------------------
+decade_playlists <- tribble(
+  ~decade, ~playlist_id,
+  "1970s", "37i9dQZF1DXaKIA8E7WcJj",
+  "1980s", "37i9dQZF1DX4UtSsGT1Sbe",
+  "1990s", "37i9dQZF1DXbTxeAdrVG2l",
+  "2000s", "37i9dQZF1DX4o1oenSJRJd",
+  "2010s", "37i9dQZF1DX5Ejj0EkURtP"
+)
+
+# ------------------- Download Function -------------------
+get_decade_dataset <- function(decade, playlist_id) {
+
+  message(paste0("Downloading ", decade, " ..."))
+
+  tracks <- get_playlist_tracks(playlist_id, limit = 100)
+
+  df <- tracks$items %>%
+    mutate(
+      track_id   = map_chr(track, "id"),
+      track_name = map_chr(track, "name"),
+      release    = map_chr(track, ~ .x$album$release_date),
+      release_year = suppressWarnings(year(ymd(release))),
+      popularity = map_int(track, "popularity"),
+      artist_id  = map_chr(track, ~ .x$artists[[1]]$id)
+    ) %>%
+    select(track_id, track_name, release_year, popularity, artist_id)
+
+  df <- df %>% drop_na(track_id)
+
+  # Audio features
+  audio <- get_track_audio_features(df$track_id)
+
+  # Artist genres
+  artist_info <- get_artists(df$artist_id)
+
+  artist_df <- tibble(
+    artist_id = map_chr(artist_info$artists, "id"),
+    genres    = map(artist_info$artists, "genres")
+  )
+
+  combined <- df %>%
+    left_join(audio, by = c("track_id" = "id")) %>%
+    left_join(artist_df, by = "artist_id") %>%
+    mutate(decade = decade)
+
+  return(combined)
+}
+
+# ------------------- Download All Data ------------------------
+raw_data <- decade_playlists %>%
+  pmap_dfr(~ get_decade_dataset(..1, ..2))
+
+# Remove rows with major missing audio fields
+data <- raw_data %>%
+  filter(!is.na(danceability),
+         !is.na(energy),
+         !is.na(valence),
+         !is.na(tempo),
+         !is.na(acousticness))
+
+# Primary genre (take first)
+data <- data %>%
+  mutate(primary_genre = map_chr(genres, ~ ifelse(length(.x) == 0, "Unknown", .x[1])))
+
+###############################################################
+#                     START RESULTS PLOTS                     #
+###############################################################
+
+theme_custom <- theme_minimal(base_size = 14) +
+  theme(panel.grid.minor = element_blank(),
+        plot.title = element_text(face="bold"))
+
+###################################
+# PLOT 1 – Energy vs Danceability #
+###################################
+p1 <- all_tracks_clean %>%
+  ggplot(aes(danceability, energy, color=decade)) +
+  geom_point(alpha=0.6) +
+  labs(title="Energy vs Danceability by Decade",
+       x="Danceability", y="Energy") +
+  theme_custom
+p1
+
+##############################################
+# PLOT 2 – Distribution of Valence Over Time #
+##############################################
+p2 <- all_tracks_clean %>%
+  ggplot(aes(valence, fill=decade)) +
+  geom_density(alpha=0.4) +
+  labs(title="Emotional Positivity (Valence) Distribution",
+       x="Valence", y="Density") +
+  theme_custom
+p2
+
+#############################################
+# PLOT 3 – Tempo Trend Across Release Years #
+#############################################
+p3 <- all_tracks_clean %>%
+  ggplot(aes(year(release_date), tempo, color=decade)) +
+  geom_smooth(se=FALSE) +
+  labs(title="How Tempo Has Changed Over Time",
+       x="Release Year", y="Tempo (BPM)") +
+  theme_custom
+p3
+
+##################################################
+# PLOT 4 – Loudness vs Energy (Multidimensional) #
+##################################################
+p4 <- all_tracks_clean %>%
+  ggplot(aes(loudness, energy, color=decade, size=danceability)) +
+  geom_point(alpha=0.6) +
+  labs(title="Loudness vs Energy (Size = Danceability)",
+       x="Loudness (dB)", y="Energy") +
+       scale_size_continuous("Danceability") +
+  theme_custom
+p4
+
+##################################
+# PLOT 5 – Count of Explicit Songs
+##################################
+p5 <- all_tracks_clean %>%
+  ggplot(aes(decade, fill=explicit)) +
+  geom_bar(position="fill") +
+  labs(title="Share of Explicit Content by Decade",
+       y="Proportion") +
+  theme_custom
+p5
+
+########################################
+# PLOT 6 – Correlation Heatmap by Decade
+########################################
+num_feats <- all_tracks_clean %>%
+  select(danceability, energy, valence, acousticness, tempo, loudness, speechiness)
+
+corr <- cor(num_feats)
+
+png("correlation_heatmap.png", width=700, height=600)
+corrplot(corr, method="color", type="lower", tl.col="black", tl.cex=.8)
+dev.off()
+
+###############################################
+# PLOT 7 – Valence vs Energy (Emotional Space)
+###############################################
+p7 <- all_tracks_clean %>%
+  ggplot(aes(energy, valence, color=decade)) +
+  geom_point(alpha=0.6) +
+  labs(title="The Emotional Space of Decades (Energy vs Valence)",
+       x="Energy", y="Valence (Happiness)") +
+  theme_custom
+p7
+
+#################################################
+# PLOT 8 – Top 20 Most Popular Tracks per Decade
+#################################################
+p8 <- all_tracks_clean %>%
+  group_by(decade) %>%
+  slice_max(popularity, n=20) %>%
+  ggplot(aes(reorder(track_name, popularity), popularity, fill=decade)) +
+  geom_col() +
+  coord_flip() +
+  labs(title="Top 20 Most Popular Tracks per Decade",
+       x="Track", y="Popularity") +
+  theme_custom
+p8
+
+###################################
+# PLOT 9 – Acousticness Over Time #
+###################################
+p9 <- all_tracks_clean %>%
+  ggplot(aes(year(release_date), acousticness, color=decade)) +
+  geom_smooth(se=FALSE) +
+  labs(title="Acousticness Trends Across Decades",
+       x="Release Year", y="Acousticness") +
+  theme_custom
+p9
+
+####################################################
+# PLOT 10 – PCA of Musical Features (Multidimensional)
+####################################################
+pca_features <- all_tracks_clean %>%
+  select(danceability, energy, valence, acousticness, speechiness, tempo, loudness) %>%
+  scale()
+
+pca <- prcomp(pca_features)
+
+p10 <- data.frame(pca$x[,1:2], decade=all_tracks_clean$decade) %>%
+  ggplot(aes(PC1, PC2, color=decade)) +
+  geom_point(alpha=0.6) +
+  labs(title="PCA of Audio Features", x="PC1", y="PC2") +
+  theme_custom
+p10
+
+###############################################################
+# END OF RESULTS
+###############################################################
+
+###############################################################
+# ---------------------- PLOT 1 ------------------------------
+# Ridgeline: Tempo by Decade
+###############################################################
+p1 <- data %>%
+  ggplot(aes(x = tempo, y = decade, fill = decade)) +
+  geom_density_ridges(alpha = 0.9, color = "white") +
+  scale_fill_viridis(discrete = TRUE, option = "D") +
+  labs(title = "Distribution of Tempo Across Decades",
+       x = "Tempo (BPM)", y = "") +
+  theme_minimal(base_size = 15) +
+  theme(legend.position = "none")
+
+
+###############################################################
+# ---------------------- PLOT 2 ------------------------------
+# Ridgeline: Valence by Decade
+###############################################################
+p2 <- data %>%
+  ggplot(aes(x = valence, y = decade, fill = decade)) +
+  geom_density_ridges(alpha = 0.9, color = "white") +
+  scale_fill_viridis(discrete = TRUE) +
+  labs(title = "Distribution of Valence (Positivity) by Decade",
+       x = "Valence (0–1)", y = "") +
+  theme_minimal(base_size = 15) +
+  theme(legend.position = "none")
+
+
+###############################################################
+# ---------------------- PLOT 3 ------------------------------
+# Boxplot: Energy by Decade
+###############################################################
+p3 <- data %>%
+  ggplot(aes(x = decade, y = energy, fill = decade)) +
+  geom_boxplot(alpha = 0.8, outlier.alpha = 0.2) +
+  scale_fill_viridis(discrete = TRUE) +
+  labs(title = "Energy Levels by Decade",
+       y = "Energy (0–1)", x = "") +
+  theme_minimal(base_size = 15) +
+  theme(legend.position = "none")
+
+
+###############################################################
+# ---------------------- PLOT 4 ------------------------------
+# Boxplot: Danceability by Decade
+###############################################################
+p4 <- data %>%
+  ggplot(aes(x = decade, y = danceability, fill = decade)) +
+  geom_boxplot(alpha = 0.8, outlier.alpha = 0.2) +
+  scale_fill_viridis(discrete = TRUE) +
+  labs(title = "Danceability by Decade",
+       y = "Danceability (0–1)", x = "") +
+  theme_minimal(base_size = 15) +
+  theme(legend.position = "none")
+
+
+###############################################################
+# ---------------------- PLOT 5 ------------------------------
+# Scatter: Energy vs Danceability
+###############################################################
+p5 <- data %>%
+  ggplot(aes(danceability, energy,
+             color = valence, size = tempo)) +
+  geom_point(alpha = 0.8) +
+  scale_color_viridis(option = "A") +
+  scale_size(range = c(1, 8)) +
+  facet_wrap(~decade) +
+  labs(title = "Energy vs Danceability (Colored by Valence, Sized by Tempo)",
+       x = "Danceability", y = "Energy",
+       color = "Valence", size = "Tempo") +
+  theme_minimal(base_size = 15)
+
+
+###############################################################
+# ---------------------- PLOT 6 ------------------------------
+# Scatter: Tempo vs Valence
+###############################################################
+p6 <- data %>%
+  ggplot(aes(tempo, valence, color = energy)) +
+  geom_point(alpha = 0.7) +
+  scale_color_viridis(option = "C") +
+  facet_wrap(~decade) +
+  labs(title = "Relationship Between Tempo and Valence",
+       x = "Tempo (BPM)", y = "Valence",
+       color = "Energy") +
+  theme_minimal(base_size = 15)
+
+
+###############################################################
+# ---------------------- PLOT 7 ------------------------------
+# Trend: Danceability over time
+###############################################################
+p7 <- data %>%
+  filter(!is.na(release_year)) %>%
+  ggplot(aes(release_year, danceability, color = decade)) +
+  geom_smooth(se = FALSE, size = 1.2) +
+  scale_color_viridis(discrete = TRUE) +
+  labs(title = "How Danceability Has Changed Over Time",
+       x = "Release Year", y = "Danceability") +
+  theme_minimal(base_size = 15)
+
+
+###############################################################
+# ---------------------- PLOT 8 ------------------------------
+# Trend: Acousticness over time
+###############################################################
+p8 <- data %>%
+  filter(!is.na(release_year)) %>%
+  ggplot(aes(release_year, acousticness, color = decade)) +
+  geom_smooth(se = FALSE, size = 1.2) +
+  scale_color_viridis(discrete = TRUE) +
+  labs(title = "Decline of Acousticness Across Decades",
+       x = "Release Year", y = "Acousticness") +
+  theme_minimal(base_size = 15)
+
+
+###############################################################
+# ---------------------- PLOT 9 ------------------------------
+# Heatmap of mean audio features
+###############################################################
+feature_means <- data %>%
+  group_by(decade) %>%
+  summarise(across(c(danceability, energy, valence, tempo, acousticness),
+                   mean, na.rm = TRUE)) %>%
+  pivot_longer(-decade, names_to = "feature", values_to = "value")
+
+p9 <- feature_means %>%
+  ggplot(aes(feature, decade, fill = value)) +
+  geom_tile(color = "white") +
+  scale_fill_viridis(option = "C") +
+  labs(title = "Average Audio Feature Levels by Decade",
+       x = "", y = "", fill = "Level") +
+  theme_minimal(base_size = 15)
+
+
+###############################################################
+# ---------------------- PLOT 10 ------------------------------
+# Parallel coordinate plot
+###############################################################
+data_sample <- data %>%
+  select(decade, danceability, energy, valence, acousticness, tempo) %>%
+  group_by(decade) %>%
+  slice_sample(n = 50)
+
+p10 <- GGally::ggparcoord(
+  data_sample,
+  columns = 2:6,
+  groupColumn = 1,
+  scale = "uniminmax",
+  alphaLines = 0.25
+) +
+  scale_color_viridis_d() +
+  labs(title = "Parallel Coordinate Plot of Audio Features (Sampled)",
+       subtitle = "Shows multidimensional patterns across decades",
+       x = "Audio Feature", y = "Scaled Value", color = "Decade") +
+  theme_minimal(base_size = 15)
